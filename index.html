@@ -1109,6 +1109,31 @@
       filter: drop-shadow(0 4px 8px rgba(142, 22, 36, 0.2));
     }
 
+    .music-toggle {
+      position: fixed;
+      right: max(16px, env(safe-area-inset-right));
+      bottom: max(16px, env(safe-area-inset-bottom));
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 46px;
+      padding: 10px 16px;
+      border: 1px solid var(--color-gold);
+      border-radius: 999px;
+      background: var(--color-crimson-dark);
+      color: #FFE6A8;
+      box-shadow: 0 4px 16px rgba(43, 8, 14, 0.3);
+      font: 600 14px var(--font-body);
+      cursor: pointer;
+    }
+    .music-toggle[hidden] {
+      display: none;
+    }
+    .music-toggle:hover {
+      background: var(--color-crimson);
+    }
+
     /* FALLING PETALS CANVAS */
     #petals-canvas {
       position: fixed;
@@ -1851,7 +1876,13 @@
     <div class="lightbox-counter" id="lightbox-counter">1 / 6</div>
   </div>
 
-  <!-- INLINE JAVASCRIPT: Complete motion, audio-free interaction, flight path, petals, sparkles & glow -->
+  <audio id="background-music" src="background-music.mp3" preload="none" loop></audio>
+  <button class="music-toggle" id="music-toggle" type="button" aria-label="Play background music" aria-pressed="false" hidden>
+    <span aria-hidden="true">&#9835;</span>
+    <span id="music-toggle-label">Music off</span>
+  </button>
+
+  <!-- INLINE JAVASCRIPT: Complete motion, audio interaction, flight path, petals, sparkles & glow -->
   <script>
     (function() {
       'use strict';
@@ -1861,12 +1892,46 @@
       const envelopeTrigger = document.getElementById('envelope-trigger');
       const waxSealBtn = document.getElementById('wax-seal-btn');
       const burstCanvas = document.getElementById('burst-canvas');
+      const backgroundMusic = document.getElementById('background-music');
+      const musicToggle = document.getElementById('music-toggle');
+      const musicToggleLabel = document.getElementById('music-toggle-label');
       let isOpened = false;
+
+      function updateMusicToggle() {
+        const isPlaying = !backgroundMusic.paused && !backgroundMusic.ended;
+        musicToggleLabel.textContent = isPlaying ? 'Music on' : 'Music off';
+        musicToggle.setAttribute('aria-label', isPlaying ? 'Pause background music' : 'Play background music');
+        musicToggle.setAttribute('aria-pressed', String(isPlaying));
+      }
+
+      function playBackgroundMusic() {
+        backgroundMusic.play().then(updateMusicToggle).catch((error) => {
+          updateMusicToggle();
+          console.warn('Background music could not be played:', error);
+        });
+      }
+
+      musicToggle.addEventListener('click', () => {
+        if (backgroundMusic.paused) {
+          playBackgroundMusic();
+        } else {
+          backgroundMusic.pause();
+          updateMusicToggle();
+        }
+      });
+
+      backgroundMusic.addEventListener('error', () => {
+        musicToggleLabel.textContent = 'Music unavailable';
+        musicToggle.setAttribute('aria-label', 'Background music unavailable');
+        musicToggle.setAttribute('aria-pressed', 'false');
+        console.error('Background music could not be loaded.', backgroundMusic.error);
+      });
 
       function openInvitation() {
         if (isOpened) return;
         isOpened = true;
         envelopeTrigger.classList.add('is-opening');
+        playBackgroundMusic();
 
         // Burst sparkling particles on wax seal
         triggerSealBurst();
@@ -1875,6 +1940,7 @@
         setTimeout(() => {
           revealOverlay.classList.add('opened');
           document.body.classList.remove('scroll-locked');
+          musicToggle.hidden = false;
           // Re-calculate flight path and trigger scroll observer
           initFlightPath();
           triggerScrollReveals();
@@ -2217,15 +2283,18 @@
         const segments = 6;
         const stepY = pageH / segments;
         let d = `M ${midX} 40 `;
+        let startX = midX;
+        let startY = 40;
 
         for (let i = 1; i <= segments; i++) {
           const targetX = (i % 2 === 1) ? rightX : leftX;
-          const prevY = (i - 1) * stepY;
           const currY = i * stepY;
-          const cpY1 = prevY + stepY * 0.45;
-          const cpY2 = prevY + stepY * 0.55;
-          const cpX1 = (i % 2 === 1) ? midX + (pageW * 0.3) : midX - (pageW * 0.3);
-          d += `C ${cpX1} ${cpY1}, ${targetX} ${cpY2}, ${targetX} ${currY} `;
+          const segmentHeight = currY - startY;
+          const cpY1 = startY + segmentHeight * 0.45;
+          const cpY2 = currY - segmentHeight * 0.45;
+          d += `C ${startX} ${cpY1}, ${targetX} ${cpY2}, ${targetX} ${currY} `;
+          startX = targetX;
+          startY = currY;
         }
 
         flightBase.setAttribute('d', d);
@@ -2238,15 +2307,19 @@
         if (!totalPathLength) return;
         const scrollY = window.pageYOffset || document.documentElement.scrollTop;
         const viewportH = window.innerHeight;
-        const pageH = Math.max(
-          document.body.scrollHeight,
-          document.documentElement.scrollHeight
-        );
-        const maxScroll = Math.max(pageH - viewportH, 1);
-        const progress = Math.min(Math.max(scrollY / maxScroll, 0), 1);
+        const targetY = scrollY + viewportH * 0.42;
+        let low = 0;
+        let high = totalPathLength;
+        for (let i = 0; i < 18; i++) {
+          const mid = (low + high) / 2;
+          if (flightBase.getPointAtLength(mid).y < targetY) {
+            low = mid;
+          } else {
+            high = mid;
+          }
+        }
 
-        // Plane rides around 42% down the screen
-        const targetLen = progress * totalPathLength;
+        const targetLen = (low + high) / 2;
         const point = flightBase.getPointAtLength(targetLen);
 
         // Dash trail for traveled stretch
@@ -2258,9 +2331,8 @@
         const pBehind = flightBase.getPointAtLength(Math.max(targetLen - delta, 0));
         const angle = Math.atan2(pAhead.y - pBehind.y, pAhead.x - pBehind.x) * (180 / Math.PI);
 
-        // Fixed viewport position around 42% of screen
-        const planeScreenY = viewportH * 0.42;
-        planeActor.style.transform = `translate3d(${point.x}px, ${planeScreenY}px, 0) rotate(${angle}deg)`;
+        const planeScreenY = point.y - scrollY;
+        planeActor.style.transform = `translate3d(${point.x}px, ${planeScreenY}px, 0) translate(-50%, -50%) rotate(${angle}deg)`;
       }
 
       window.addEventListener('scroll', () => {
@@ -2270,6 +2342,13 @@
       window.addEventListener('resize', () => {
         initFlightPath();
       });
+
+      if ('ResizeObserver' in window) {
+        const flightPathResizeObserver = new ResizeObserver(() => {
+          if (isOpened) initFlightPath();
+        });
+        flightPathResizeObserver.observe(document.querySelector('.main-wrap'));
+      }
 
       // 8. FALLING LOTUS & ROSE PETALS (10 on mobile, 18 on desktop)
       const petalsCanvas = document.getElementById('petals-canvas');
